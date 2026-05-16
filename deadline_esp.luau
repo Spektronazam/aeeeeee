@@ -1,257 +1,173 @@
---!optimize 2
---!native
--- Deadline ESP + Chams | Made By: vana0x1
--- Improved version: same behavior, faster hot loop, leak-free.
+-- deadline esp+chams ~vana0x1
+-- ins=toggle  end=kill
 
-local Players          = game:GetService("Players")
-local Workspace        = game:GetService("Workspace")
-local RunService       = game:GetService("RunService")
-local UserInputService = game:GetService("UserInputService")
+--                          <>
+--                        <><><>
+--                      <><><><><>
+--                    <><><><><><><>
+--                  <><><><><><><><><>
+--                    <><><><><><><>
+--                      <><><><><>
+--                        <><><>
+--                          <>
 
-local Camera      = Workspace.CurrentCamera
-local LocalPlayer = Players.LocalPlayer
-local CharFolder  = Workspace:WaitForChild("characters")
+local plr = game:GetService("Players").LocalPlayer
+local cam = workspace.CurrentCamera
+local rs  = game:GetService("RunService")
+local uis = game:GetService("UserInputService")
+local cf  = workspace:WaitForChild("characters")
 
--- ===== Config =================================================================
-local CONFIG = {
-    BoxColor        = Color3.fromRGB(0,   255, 255), -- Cyan
-    NameColor       = Color3.fromRGB(255, 255, 100), -- Yellow
-    TracerColor     = Color3.fromRGB(255, 0,   0),   -- Red
-    ChamsFill       = Color3.fromRGB(255, 165, 0),   -- Orange
-    ChamsOutline    = Color3.fromRGB(255, 200, 0),
+local on, D, C = true, {}, {}
+local cA, cR, cF, cI
 
-    BoxThickness    = 1,
-    TracerThickness = 1,
-    TracerAlpha     = 0.75,
+--                          <>
+--                        <><><>
+--                      <><><><><>
+--                    <><><><><><><>
+--                  <><><><><><><><><>
+--                    <><><><><><><>
+--                      <><><><><>
+--                        <><><>
+--                          <>
 
-    NameSize        = 13,
-    NameFont        = 2, -- Plex
-    NameYOffset     = 20,
-
-    BoxTopOffset    = Vector3.new(0,  2.5, 0),
-    BoxBottomOffset = Vector3.new(0,  3,   0),
-    BoxWidthRatio   = 0.6,
-
-    FillTransparency    = 0.65,
-    OutlineTransparency = 0,
-
-    SpawnDelay      = 0.3,
-    ToggleKey       = Enum.KeyCode.Insert,
-    DestroyKey      = Enum.KeyCode.End,
-}
-
--- ===== Localized hot-path refs ================================================
-local pairs, ipairs        = pairs, ipairs
-local mfloor, mabs, mmin   = math.floor, math.abs, math.min
-local V2new                = Vector2.new
-local Drawing_new          = Drawing.new
-local Instance_new         = Instance.new
-
--- ===== State ==================================================================
-local ESP_ENABLED        = true
-local DRAWINGS           = {}
-local CHAMS              = {}
-local AddedConnection    = nil
-local RemovedConnection  = nil
-local RenderConnection   = nil
-local InputConnection    = nil
-
-print("Deadline ESP + CHAMS | Loaded")
-
--- ===== Helpers ================================================================
-local function getRoot(model)
-    return model:FindFirstChild("HumanoidRootPart")
-        or model:FindFirstChildWhichIsA("BasePart", true)
+local function root(m)
+	return m:FindFirstChild("HumanoidRootPart") or m:FindFirstChildWhichIsA("BasePart", true)
 end
 
-local function setVisible(drawings, state)
-    for _, d in pairs(drawings) do
-        d.Visible = state
-    end
+local function vis(t, s) for _, d in pairs(t) do d.Visible = s end end
+
+local function mkE(m)
+	if D[m] then return end
+	local b, n, t = Drawing.new("Square"), Drawing.new("Text"), Drawing.new("Line")
+	b.Thickness = 1  b.Filled = false  b.Transparency = 1
+	b.Color = Color3.fromRGB(0, 255, 255)
+	n.Size = 13  n.Center = true  n.Outline = true  n.Font = 2
+	n.Color = Color3.fromRGB(255, 255, 100)
+	t.Thickness = 1  t.Transparency = .75
+	t.Color = Color3.fromRGB(255, 0, 0)
+	D[m] = { b, n, t }
 end
 
-local function destroyDrawings(drawings)
-    for _, d in pairs(drawings) do
-        pcall(d.Remove, d)
-    end
+local function mkC(m)
+	if C[m] then return end
+	local h = Instance.new("Highlight")
+	h.FillColor    = Color3.fromRGB(255, 165, 0)
+	h.OutlineColor = Color3.fromRGB(255, 200, 0)
+	h.FillTransparency = .65
+	h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+	h.Adornee = m  h.Parent = m
+	C[m] = h
 end
 
-local function createESP(model)
-    if DRAWINGS[model] then return end
+--                          <>
+--                        <><><>
+--                      <><><><><>
+--                    <><><><><><><>
+--                  <><><><><><><><><>
+--                    <><><><><><><>
+--                      <><><><><>
+--                        <><><>
+--                          <>
 
-    local box    = Drawing_new("Square")
-    box.Thickness    = CONFIG.BoxThickness
-    box.Filled       = false
-    box.Transparency = 1
-    box.Color        = CONFIG.BoxColor
-
-    local name   = Drawing_new("Text")
-    name.Size    = CONFIG.NameSize
-    name.Center  = true
-    name.Outline = true
-    name.Font    = CONFIG.NameFont
-    name.Color   = CONFIG.NameColor
-
-    local tracer = Drawing_new("Line")
-    tracer.Thickness    = CONFIG.TracerThickness
-    tracer.Transparency = CONFIG.TracerAlpha
-    tracer.Color        = CONFIG.TracerColor
-
-    DRAWINGS[model] = { Box = box, Name = name, Tracer = tracer }
+local function rm(m)
+	local d = D[m]
+	if d then
+		for _, x in pairs(d) do pcall(x.Remove, x) end
+		D[m] = nil
+	end
+	local h = C[m]
+	if h then pcall(h.Destroy, h)  C[m] = nil end
 end
 
-local function createChams(model)
-    if CHAMS[model] then return end
-    local highlight = Instance_new("Highlight")
-    highlight.FillColor           = CONFIG.ChamsFill
-    highlight.OutlineColor        = CONFIG.ChamsOutline
-    highlight.FillTransparency    = CONFIG.FillTransparency
-    highlight.OutlineTransparency = CONFIG.OutlineTransparency
-    highlight.DepthMode           = Enum.HighlightDepthMode.AlwaysOnTop
-    highlight.Adornee             = model
-    highlight.Parent              = model
-    CHAMS[model] = highlight
+local function tick()
+	local vp = cam.ViewportSize
+	local hx, by = vp.X * .5, vp.Y
+	local me = plr.Character
+	local mr = me and me:FindFirstChild("HumanoidRootPart")
+	local mp = mr and mr.Position
+
+	for m, d in pairs(D) do
+		local r = m.Parent and root(m)
+		if not r or not on then vis(d, false) continue end
+
+		local rp, ok = cam:WorldToViewportPoint(r.Position)
+		if not ok or rp.Z < 0 then vis(d, false) continue end
+
+		local wp = r.Position
+		local tp = cam:WorldToViewportPoint(wp + Vector3.new(0, 2.5, 0))
+		local bp = cam:WorldToViewportPoint(wp - Vector3.new(0, 3, 0))
+		local bh = math.abs(tp.Y - bp.Y)
+		local bw = bh * .6
+		local ty = math.min(tp.Y, bp.Y)
+
+		d[1].Size = Vector2.new(bw, bh)
+		d[1].Position = Vector2.new(rp.X - bw * .5, ty)
+		d[1].Visible = true
+
+		local dist = mp and math.floor((wp - mp).Magnitude) or 0
+		d[2].Text = m.Name .. " [" .. dist .. "m]"
+		d[2].Position = Vector2.new(rp.X, ty - 20)
+		d[2].Visible = true
+
+		d[3].From = Vector2.new(hx, by)
+		d[3].To = Vector2.new(rp.X, bp.Y)
+		d[3].Visible = true
+	end
 end
 
-local function removeEntity(model)
-    local d = DRAWINGS[model]
-    if d then
-        destroyDrawings(d)
-        DRAWINGS[model] = nil
-    end
-    local h = CHAMS[model]
-    if h then
-        pcall(h.Destroy, h)
-        CHAMS[model] = nil
-    end
+--                          <>
+--                        <><><>
+--                      <><><><><>
+--                    <><><><><><><>
+--                  <><><><><><><><><>
+--                    <><><><><><><>
+--                      <><><><><>
+--                        <><><>
+--                          <>
+
+local function reg(m) if root(m) then mkE(m) mkC(m) end end
+
+for _, m in ipairs(cf:GetChildren()) do reg(m) end
+
+cA = cf.ChildAdded:Connect(function(m) task.wait(.3) if m.Parent then reg(m) end end)
+cR = cf.ChildRemoved:Connect(rm)
+cF = rs.RenderStepped:Connect(tick)
+
+local function nuke()
+	if cF then cF:Disconnect()  cF = nil end
+	if cA then cA:Disconnect()  cA = nil end
+	if cR then cR:Disconnect()  cR = nil end
+	for _, d in pairs(D) do for _, x in pairs(d) do pcall(x.Remove, x) end end
+	for _, h in pairs(C) do pcall(h.Destroy, h) end
+	for _, m in ipairs(cf:GetChildren()) do
+		for _, o in ipairs(m:GetDescendants()) do
+			if o:IsA("Highlight") then pcall(o.Destroy, o) end
+		end
+	end
+	D, C, on = {}, {}, false
 end
 
--- ===== Per-frame update =======================================================
-local function updateESP()
-    -- Read once per frame, not once per entity.
-    local viewport = Camera.ViewportSize
-    local halfX    = viewport.X * 0.5
-    local botY     = viewport.Y
+--                          <>
+--                        <><><>
+--                      <><><><><>
+--                    <><><><><><><>
+--                  <><><><><><><><><>
+--                    <><><><><><><>
+--                      <><><><><>
+--                        <><><>
+--                          <>
 
-    -- Resolve self-root once per frame for distance calcs.
-    local selfChar = LocalPlayer.Character
-    local selfRoot = selfChar and selfChar:FindFirstChild("HumanoidRootPart")
-    local selfPos  = selfRoot and selfRoot.Position
-
-    for model, drawings in pairs(DRAWINGS) do
-        local root = model.Parent and getRoot(model)
-        if not root or not ESP_ENABLED then
-            setVisible(drawings, false)
-            continue
-        end
-
-        local rootWorldPos = root.Position
-        local rootPos, onScreen = Camera:WorldToViewportPoint(rootWorldPos)
-        if not onScreen or rootPos.Z < 0 then
-            setVisible(drawings, false)
-            continue
-        end
-
-        -- Box
-        local topPos    = Camera:WorldToViewportPoint(rootWorldPos + CONFIG.BoxTopOffset)
-        local bottomPos = Camera:WorldToViewportPoint(rootWorldPos - CONFIG.BoxBottomOffset)
-        local boxHeight = mabs(topPos.Y - bottomPos.Y)
-        local boxWidth  = boxHeight * CONFIG.BoxWidthRatio
-        local boxTopY   = mmin(topPos.Y, bottomPos.Y)
-
-        local box = drawings.Box
-        box.Size     = V2new(boxWidth, boxHeight)
-        box.Position = V2new(rootPos.X - boxWidth * 0.5, boxTopY)
-        box.Visible  = true
-
-        -- Name
-        local dist = selfPos and mfloor((rootWorldPos - selfPos).Magnitude) or 0
-        local nameDraw = drawings.Name
-        nameDraw.Text     = model.Name .. " [" .. dist .. "m]"
-        nameDraw.Position = V2new(rootPos.X, boxTopY - CONFIG.NameYOffset)
-        nameDraw.Visible  = true
-
-        -- Tracer
-        local tracer = drawings.Tracer
-        tracer.From    = V2new(halfX, botY)
-        tracer.To      = V2new(rootPos.X, bottomPos.Y)
-        tracer.Visible = true
-    end
-end
-
--- ===== Wire up ================================================================
-local function tryRegister(model)
-    if getRoot(model) then
-        createESP(model)
-        createChams(model)
-    end
-end
-
--- Initial scan
-for _, model in ipairs(CharFolder:GetChildren()) do
-    tryRegister(model)
-end
-
--- New characters: small delay to let parts replicate, then register.
-AddedConnection = CharFolder.ChildAdded:Connect(function(model)
-    task.wait(CONFIG.SpawnDelay)
-    if model.Parent then
-        tryRegister(model)
-    end
+cI = uis.InputBegan:Connect(function(i, gp)
+	if gp then return end
+	if i.KeyCode == Enum.KeyCode.Insert then
+		on = not on
+		for _, h in pairs(C) do if h and h.Parent then h.Enabled = on end end
+		print("esp", on)
+	elseif i.KeyCode == Enum.KeyCode.End then
+		nuke()
+		if cI then cI:Disconnect()  cI = nil end
+		print("nuked")
+	end
 end)
 
--- Free per-model resources when a character despawns (prevents table growth).
-RemovedConnection = CharFolder.ChildRemoved:Connect(removeEntity)
-
-RenderConnection = RunService.RenderStepped:Connect(updateESP)
-
--- ===== Master destroy =========================================================
-local function destroyAll()
-    print("END pressed - DESTROY")
-
-    if RenderConnection  then RenderConnection:Disconnect();  RenderConnection  = nil end
-    if AddedConnection   then AddedConnection:Disconnect();   AddedConnection   = nil end
-    if RemovedConnection then RemovedConnection:Disconnect(); RemovedConnection = nil end
-
-    for _, drawings in pairs(DRAWINGS) do destroyDrawings(drawings) end
-    for _, h in pairs(CHAMS)            do pcall(h.Destroy, h)      end
-
-    -- Sweep any leftover Highlights we didn't track.
-    for _, model in ipairs(CharFolder:GetChildren()) do
-        for _, obj in ipairs(model:GetDescendants()) do
-            if obj:IsA("Highlight") then
-                pcall(obj.Destroy, obj)
-            end
-        end
-    end
-
-    DRAWINGS    = {}
-    CHAMS       = {}
-    ESP_ENABLED = false
-    print("All ESP + Chams destroyed..")
-end
-
--- ===== Hotkeys ================================================================
-InputConnection = UserInputService.InputBegan:Connect(function(input, gp)
-    if gp then return end
-
-    local key = input.KeyCode
-    if key == CONFIG.ToggleKey then
-        ESP_ENABLED = not ESP_ENABLED
-        for _, h in pairs(CHAMS) do
-            if h and h.Parent then h.Enabled = ESP_ENABLED end
-        end
-        print("ESP + Chams Toggled ->", ESP_ENABLED)
-
-    elseif key == CONFIG.DestroyKey then
-        destroyAll()
-        if InputConnection then
-            InputConnection:Disconnect()
-            InputConnection = nil
-        end
-    end
-end)
-
-print("Controls:")
-print("   INS  -> Toggle ESP + Chams")
-print("   END  -> Completely destroy everything")
+print("loaded // ins=toggle, end=kill")
